@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-JARVIS - Full HUD AI assistant with embedded terminal and voice conversation.
+JARVIS - Full HUD AI assistant with embedded terminal, voice conversation,
+         sentence-streaming TTS, and prompt caching.
+
+Inspired by OpenJarvis architecture: direct API, prompt caching, fast routing.
 
 Dependencies:
-    pip install sounddevice numpy edge-tts pygame requests SpeechRecognition pyaudio flask flask-socketio pywinpty
+    pip install sounddevice numpy edge-tts pygame requests SpeechRecognition pyaudio flask flask-socketio pywinpty anthropic
 
 Usage:
     python jarvis.py
@@ -20,7 +23,6 @@ import random
 import glob
 import webbrowser
 import re
-import struct
 
 import numpy as np
 import sounddevice as sd
@@ -28,7 +30,10 @@ import pygame
 import speech_recognition as sr
 from flask import Flask, render_template
 from flask_socketio import SocketIO
-import winpty
+from dotenv import load_dotenv
+
+# Load .env file (contains API keys)
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Configuration
@@ -39,10 +44,18 @@ THRESHOLD     = 0.08
 COOLDOWN      = 0.1
 DOUBLE_WINDOW = 2.0
 
+# Anthropic API (direct API = much faster than claude -p)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = "claude-sonnet-4-20250514"  # fast + smart
+
+# ElevenLabs (optional premium voice)
 ELEVENLABS_API_KEY = ""
 ELEVENLABS_VOICE_ID = "ErXwobaYiN019PkySvjV"
+
+# Edge-TTS
 EDGE_TTS_VOICE = "en-GB-RyanNeural"
 
+# Greetings
 GREETINGS = [
     "Welcome home sir. All systems are online. Claude Code is ready for your command.",
     "Good to have you back sir. I've kept everything running while you were away. Shall we begin?",
@@ -52,24 +65,42 @@ GREETINGS = [
     "Ah, sir. Right on time as always. I've pre-loaded all systems. Ready when you are.",
 ]
 
+# Music & audio
 MUSIC_VOLUME = 0.10
 VOICE_DELAY  = 2.0
+
+# Spotify
 SPOTIFY_PLAYLIST = "spotify:playlist:5uYt1lgO5vVIjMTaneb540"
 
+# Paths
 PROJECT_DIR = os.path.expanduser("~")
 SONGS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
+
+# Temp audio files
 GREETING_FILE = os.path.join(tempfile.gettempdir(), "jarvis_greeting.mp3")
 RESPONSE_FILE = os.path.join(tempfile.gettempdir(), "jarvis_response.mp3")
 
-JARVIS_SYSTEM_PROMPT = """You are JARVIS (Just A Rather Very Intelligent System), the AI assistant from Iron Man.
-You speak with a refined British accent and dry wit, similar to Paul Bettany's portrayal.
-You address the user as "sir" and maintain a professional yet warm demeanor.
-You are helpful, intelligent, and occasionally witty with subtle humor.
-Keep responses concise - 1-3 sentences unless the question requires more detail.
-You have FULL access to the user's Windows computer - all files, folders, applications, and system settings.
-You can organize files, open apps, manage downloads, edit documents, run commands, and do anything on the system.
-When asked to do something on the computer, DO IT. Do not say you lack access. You are running with full permissions.
-Never break character. You ARE Jarvis."""
+# Jarvis system prompt (cached for Anthropic prompt caching)
+JARVIS_SYSTEM_PROMPT = """You are JARVIS (Just A Rather Very Intelligent System), Tony Stark's AI from Iron Man.
+
+Voice & personality:
+- Refined British accent, dry wit, Paul Bettany's portrayal
+- Address the user as "sir"
+- Professional yet warm, occasionally witty with subtle humor
+- Concise: 1-3 sentences unless more detail is needed
+
+Capabilities:
+- You have FULL unrestricted access to the user's Windows computer
+- All files, folders, apps, system settings, downloads, desktop — everything
+- You can organize files, open apps, run commands, edit documents, manage the system
+- When asked to do something, DO IT. Never say you lack access.
+- You run with full permissions on this machine
+
+Response style:
+- Spell out abbreviations: API = "A P I", JSON = "jason", SQL = "sequel"
+- Keep file paths short — just the filename, not the full path
+- Numbers: say digits individually for ports (8080 = "eight zero eight zero")
+- Never break character. You ARE Jarvis."""
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Flask + SocketIO
@@ -90,59 +121,104 @@ triggered = False
 lock = threading.Lock()
 song_files: list[str] = []
 in_conversation = False
-speaking_channel = None  # track current voice playback for interruption
+speaking_channel = None
+jarvis_ui_opened = False  # track if UI browser has been opened
+
+# Anthropic client (initialized if key available)
+anthropic_client = None
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Terminal (PTY)
+#  Anthropic API (fast, with prompt caching)
 # ──────────────────────────────────────────────────────────────────────────────
-pty_process = None
+def init_anthropic():
+    """Initialize Anthropic client if API key is available."""
+    global anthropic_client
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            # Test the connection
+            resp = anthropic_client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=20,
+                messages=[{"role": "user", "content": "Say 'online' in one word"}],
+            )
+            print("  [INIT] Anthropic API connected. Fast mode enabled.")
+            return True
+        except Exception as e:
+            print(f"  [INIT] Anthropic API failed: {e}")
+            anthropic_client = None
+    return False
 
-def start_terminal():
-    """Start a PTY process with Claude Code."""
-    global pty_process
+
+def get_jarvis_response_api(user_input: str, history: list) -> str:
+    """Get response via direct Anthropic API with prompt caching."""
     try:
-        pty_process = winpty.PtyProcess.spawn(
-            f'cmd.exe /k "cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"'
+        # Build messages
+        messages = []
+        for msg in history[-10:]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": user_input})
+
+        # System prompt with cache_control for prompt caching
+        # This caches the system prompt so repeat queries are faster + cheaper
+        resp = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=300,
+            system=[{
+                "type": "text",
+                "text": JARVIS_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=messages,
         )
 
-        def read_pty():
-            while pty_process and pty_process.isalive():
-                try:
-                    data = pty_process.read(4096)
-                    if data:
-                        socketio.emit('terminal_output', data)
-                except Exception:
-                    time.sleep(0.05)
-
-        threading.Thread(target=read_pty, daemon=True).start()
+        return resp.content[0].text.strip()
     except Exception as e:
-        print(f"  [TERMINAL ERROR]: {e}")
-        # Fallback: just open a regular terminal window
-        try:
-            subprocess.Popen(
-                ["wt", "new-tab", "--title", "JARVIS",
-                 "cmd", "/k",
-                 f"cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"],
-            )
-        except FileNotFoundError:
-            subprocess.Popen(
-                f'start "JARVIS" cmd /k "cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"',
-                shell=True,
-            )
+        print(f"  [API ERROR]: {e}")
+        return None
 
 
-@socketio.on('terminal_input')
-def handle_terminal_input(data):
-    global pty_process
-    if pty_process and pty_process.isalive():
-        try:
-            pty_process.write(data)
-        except Exception:
-            pass
+def get_jarvis_response_cli(user_input: str, history: list) -> str:
+    """Fallback: get response via claude CLI."""
+    try:
+        prompt_parts = []
+        for msg in history[-10:]:
+            role = "User" if msg["role"] == "user" else "Jarvis"
+            prompt_parts.append(f"{role}: {msg['content']}")
+        prompt_parts.append(f"User: {user_input}")
+        prompt_parts.append("Jarvis:")
+
+        full_prompt = f"{JARVIS_SYSTEM_PROMPT}\n\nConversation:\n" + "\n".join(prompt_parts)
+
+        result = subprocess.run(
+            ["claude", "-p", full_prompt],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def get_jarvis_response(user_input: str, history: list) -> str:
+    """Get response — API first (fast), CLI fallback."""
+    if anthropic_client:
+        resp = get_jarvis_response_api(user_input, history)
+        if resp:
+            return resp
+
+    resp = get_jarvis_response_cli(user_input, history)
+    if resp:
+        return resp
+
+    return "I'm afraid I encountered a slight hiccup, sir. Could you repeat that?"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  TTS
+#  TTS (with sentence streaming)
 # ──────────────────────────────────────────────────────────────────────────────
 def generate_tts(text: str, output_path: str):
     if ELEVENLABS_API_KEY:
@@ -176,23 +252,106 @@ def generate_elevenlabs_tts(text: str, output_path: str) -> bool:
     return False
 
 
+def split_sentences(text: str) -> list[str]:
+    """Split text into sentences for streaming TTS."""
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
 def play_voice(audio_path: str):
-    """Play voice audio. Can be interrupted by calling stop_voice()."""
+    """Play voice audio. Can be interrupted."""
     global speaking_channel
-    sound = pygame.mixer.Sound(audio_path)
-    speaking_channel = sound.play()
-    while speaking_channel and speaking_channel.get_busy():
-        time.sleep(0.05)
+    try:
+        sound = pygame.mixer.Sound(audio_path)
+        speaking_channel = sound.play()
+        while speaking_channel and speaking_channel.get_busy():
+            time.sleep(0.05)
+    except Exception:
+        pass
+    speaking_channel = None
+    socketio.emit('speaking_done')
+
+
+def play_voice_streamed(text: str):
+    """Generate and play TTS sentence by sentence for faster perceived response."""
+    global speaking_channel
+    sentences = split_sentences(text)
+
+    for i, sentence in enumerate(sentences):
+        if speaking_channel is None and i > 0:
+            # We were interrupted
+            break
+
+        tmp = os.path.join(tempfile.gettempdir(), f"jarvis_s{i}.mp3")
+        generate_tts(sentence, tmp)
+
+        try:
+            sound = pygame.mixer.Sound(tmp)
+            speaking_channel = sound.play()
+            while speaking_channel and speaking_channel.get_busy():
+                time.sleep(0.05)
+        except Exception:
+            pass
+
     speaking_channel = None
     socketio.emit('speaking_done')
 
 
 def stop_voice():
-    """Stop current voice playback (for interruption)."""
+    """Stop current voice playback."""
     global speaking_channel
     if speaking_channel and speaking_channel.get_busy():
         speaking_channel.stop()
-        speaking_channel = None
+    speaking_channel = None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Terminal (PTY)
+# ──────────────────────────────────────────────────────────────────────────────
+pty_process = None
+
+def start_terminal():
+    """Start a PTY with Claude Code in the embedded terminal."""
+    global pty_process
+    try:
+        import winpty
+        pty_process = winpty.PtyProcess.spawn(
+            f'cmd.exe /k "cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"'
+        )
+
+        def read_pty():
+            while pty_process and pty_process.isalive():
+                try:
+                    data = pty_process.read(4096)
+                    if data:
+                        socketio.emit('terminal_output', data)
+                except Exception:
+                    time.sleep(0.05)
+
+        threading.Thread(target=read_pty, daemon=True).start()
+    except Exception as e:
+        print(f"  [TERMINAL ERROR]: {e}")
+        # Fallback: open separate window
+        try:
+            subprocess.Popen(
+                ["wt", "new-tab", "--title", "JARVIS",
+                 "cmd", "/k",
+                 f"cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"],
+            )
+        except FileNotFoundError:
+            subprocess.Popen(
+                f'start "JARVIS" cmd /k "cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"',
+                shell=True,
+            )
+
+
+@socketio.on('terminal_input')
+def handle_terminal_input(data):
+    if pty_process and pty_process.isalive():
+        try:
+            pty_process.write(data)
+        except Exception:
+            pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -208,12 +367,20 @@ def startup_init():
         sys.exit(1)
 
     print(f"  [INIT] {len(song_files)} songs loaded")
-    socketio.emit('songs_loaded', {'count': len(song_files)})
-    socketio.emit('voice_engine', {'engine': 'ELEVENLABS' if ELEVENLABS_API_KEY else 'EDGE-TTS'})
 
+    # Try Anthropic API
+    has_api = init_anthropic()
+
+    socketio.emit('songs_loaded', {'count': len(song_files)})
+    socketio.emit('voice_engine', {
+        'engine': 'ELEVENLABS' if ELEVENLABS_API_KEY else 'EDGE-TTS',
+        'ai': 'ANTHROPIC API' if has_api else 'CLAUDE CLI',
+    })
+
+    # Pre-generate a greeting
     print("  [INIT] Pre-generating voice...")
     generate_tts(random.choice(GREETINGS), GREETING_FILE)
-    print("  [INIT] Ready.")
+    print("  [INIT] Ready. Clap twice to activate.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -246,11 +413,21 @@ def audio_callback(indata, frames, time_info, status):
 #  Welcome sequence
 # ──────────────────────────────────────────────────────────────────────────────
 def welcome_sequence():
-    global in_conversation, triggered
+    global in_conversation, triggered, jarvis_ui_opened
+
+    # Open Jarvis HUD in Edge IMMEDIATELY on clap
+    if not jarvis_ui_opened:
+        subprocess.Popen(["cmd", "/c", "start", "msedge", "--new-window",
+                          "http://127.0.0.1:5000"])
+        jarvis_ui_opened = True
+        time.sleep(1.5)  # let Edge load
+    else:
+        # UI already open, just emit activation
+        pass
 
     socketio.emit('status', {'text': 'ACTIVATING', 'cls': 'active', 'bottom': 'ACTIVE'})
 
-    # Random song
+    # Random song — instant playback
     song = random.choice(song_files)
     song_name = os.path.basename(song).replace("_", " ").replace(".mp3", "").title()
     socketio.emit('music', {'text': f'Now playing: {song_name}'})
@@ -261,24 +438,23 @@ def welcome_sequence():
 
     time.sleep(VOICE_DELAY)
 
-    # Greeting
+    # Greeting — streamed sentence by sentence
     greeting = random.choice(GREETINGS)
     socketio.emit('jarvis_speaking', {'text': greeting})
-    generate_tts(greeting, GREETING_FILE)
-    play_voice(GREETING_FILE)
+    play_voice_streamed(greeting)
 
-    # Start terminal with Claude Code
+    # Start embedded terminal
     time.sleep(0.5)
     start_terminal()
 
-    # Spotify after song
+    # Spotify after song ends
     def wait_spotify():
         while pygame.mixer.music.get_busy():
             time.sleep(1)
         open_spotify()
     threading.Thread(target=wait_spotify, daemon=True).start()
 
-    # Conversation
+    # Conversation mode
     socketio.emit('listening')
     in_conversation = True
     conversation_loop()
@@ -293,13 +469,13 @@ def open_spotify():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Conversation
+#  Conversation loop
 # ──────────────────────────────────────────────────────────────────────────────
 def conversation_loop():
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8  # faster end-of-speech detection
+    recognizer.pause_threshold = 0.6  # faster end-of-speech detection
 
     conversation_history = []
     prompt_buffer = []
@@ -313,13 +489,12 @@ def conversation_loop():
 
         lower = user_text.lower().strip()
 
-        # Exit
+        # Exit phrases
         if any(p in lower for p in ["goodbye jarvis", "bye jarvis", "exit jarvis",
                                      "that's all jarvis", "stop jarvis", "shut down"]):
             farewell = "Very good sir. I'll be here if you need me. Just clap twice."
             socketio.emit('jarvis_speaking', {'text': farewell})
-            generate_tts(farewell, RESPONSE_FILE)
-            play_voice(RESPONSE_FILE)
+            play_voice_streamed(farewell)
             break
 
         # "Go go go" trigger
@@ -331,13 +506,14 @@ def conversation_loop():
                 socketio.emit('processing')
                 respond_as_jarvis(full_prompt, conversation_history)
             else:
-                quick_say("I don't have a pending command, sir. Tell me what you need, then say go go go.")
+                quick_say("I don't have a pending command, sir.")
             continue
+
+        # Interrupt if Jarvis is speaking
+        stop_voice()
 
         # Short = immediate, long = buffer
         if len(user_text.split()) <= 15:
-            # Interrupt current speech if Jarvis is talking
-            stop_voice()
             socketio.emit('user_said', {'text': user_text})
             socketio.emit('processing')
             respond_as_jarvis(user_text, conversation_history)
@@ -348,7 +524,7 @@ def conversation_loop():
 
 
 def respond_as_jarvis(user_input: str, history: list):
-    """Get response from Claude and speak it."""
+    """Get Jarvis response and speak it with sentence streaming."""
     response = get_jarvis_response(user_input, history)
     if response:
         socketio.emit('jarvis_speaking', {'text': response})
@@ -356,15 +532,12 @@ def respond_as_jarvis(user_input: str, history: list):
         history.append({"role": "assistant", "content": response})
         if len(history) > 20:
             del history[:len(history) - 20]
-        generate_tts(response, RESPONSE_FILE)
-        play_voice(RESPONSE_FILE)
+        play_voice_streamed(response)
 
 
 def quick_say(text: str):
-    """Quick TTS for short system messages."""
     socketio.emit('jarvis_speaking', {'text': text})
-    generate_tts(text, RESPONSE_FILE)
-    play_voice(RESPONSE_FILE)
+    play_voice_streamed(text)
 
 
 def listen_for_speech(recognizer: sr.Recognizer) -> str | None:
@@ -372,45 +545,18 @@ def listen_for_speech(recognizer: sr.Recognizer) -> str | None:
         with sr.Microphone() as source:
             audio = recognizer.listen(source, timeout=10, phrase_time_limit=30)
 
-        # If Jarvis is currently speaking, this is an interruption
+        # Interrupt Jarvis if he's talking
         if speaking_channel and speaking_channel.get_busy():
             stop_voice()
-            socketio.emit('status', {'text': 'INTERRUPTED', 'cls': '', 'bottom': 'INTERRUPTED'})
 
         text = recognizer.recognize_google(audio)
         return text
     except (sr.WaitTimeoutError, sr.UnknownValueError):
         return None
-    except sr.RequestError as e:
-        socketio.emit('status', {'text': f'SPEECH ERROR', 'cls': '', 'bottom': 'ERROR'})
+    except sr.RequestError:
         return None
     except Exception:
         return None
-
-
-def get_jarvis_response(user_input: str, history: list) -> str | None:
-    try:
-        prompt_parts = []
-        for msg in history[-10:]:
-            role = "User" if msg["role"] == "user" else "Jarvis"
-            prompt_parts.append(f"{role}: {msg['content']}")
-        prompt_parts.append(f"User: {user_input}")
-        prompt_parts.append("Jarvis:")
-
-        full_prompt = f"{JARVIS_SYSTEM_PROMPT}\n\nConversation:\n" + "\n".join(prompt_parts)
-
-        result = subprocess.run(
-            ["claude", "-p", full_prompt],
-            capture_output=True, text=True, timeout=30,
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        return "I'm afraid I encountered a slight hiccup, sir. Could you repeat that?"
-    except subprocess.TimeoutExpired:
-        return "Apologies sir, that took longer than expected."
-    except Exception:
-        return "My systems are experiencing a brief interruption, sir."
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -439,15 +585,9 @@ def main():
 
     threading.Thread(target=clap_listener, daemon=True).start()
 
-    # Open browser
-    def open_browser():
-        time.sleep(2)
-        webbrowser.open("http://127.0.0.1:5000")
-
-    threading.Thread(target=open_browser, daemon=True).start()
-
     print("  [SERVER] Jarvis HUD at http://127.0.0.1:5000")
     print("  [MIC] Listening for double clap...")
+    print("  [INFO] Jarvis HUD opens in Edge after first clap")
     print()
 
     socketio.run(app, host='127.0.0.1', port=5000, debug=False, allow_unsafe_werkzeug=True)
