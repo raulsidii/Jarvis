@@ -4,310 +4,457 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>J.A.R.V.I.S.</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        :root {
+            --cyan: #00c3ff;
+            --cyan-dim: rgba(0, 195, 255, 0.15);
+            --cyan-glow: rgba(0, 195, 255, 0.4);
+            --green: #00ff88;
+            --amber: #ffaa00;
+            --dark: #020810;
+            --panel-bg: rgba(0, 12, 24, 0.85);
+            --border: rgba(0, 195, 255, 0.2);
+        }
+
         body {
-            background: #000;
+            background: var(--dark);
             color: #fff;
             font-family: 'Rajdhani', sans-serif;
             overflow: hidden;
             height: 100vh;
-            width: 100vw;
         }
 
-        /* ── Background grid ── */
+        /* ── Scanline overlay ── */
+        .scanlines {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 999;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.03) 2px,
+                rgba(0, 0, 0, 0.03) 4px
+            );
+        }
+
+        /* ── Background ── */
         .bg-grid {
             position: fixed;
             top: 0; left: 0;
             width: 100%; height: 100%;
             background-image:
-                linear-gradient(rgba(0, 195, 255, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 195, 255, 0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
-            z-index: 0;
+                linear-gradient(var(--cyan-dim) 1px, transparent 1px),
+                linear-gradient(90deg, var(--cyan-dim) 1px, transparent 1px);
+            background-size: 60px 60px;
+            opacity: 0.3;
         }
 
-        /* ── Main layout ── */
-        .container {
-            position: relative;
-            z-index: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            height: 100vh;
-            padding: 30px;
-        }
-
-        /* ── Header ── */
-        .header {
-            font-family: 'Orbitron', monospace;
-            font-size: 14px;
-            letter-spacing: 8px;
-            color: rgba(0, 195, 255, 0.6);
-            text-transform: uppercase;
-            margin-bottom: 10px;
-        }
-
-        .status-bar {
-            font-size: 12px;
-            letter-spacing: 4px;
-            color: rgba(0, 195, 255, 0.4);
-            margin-bottom: 30px;
-            transition: all 0.5s ease;
-        }
-
-        .status-bar.active { color: rgba(0, 195, 255, 0.8); }
-        .status-bar.speaking { color: rgba(0, 255, 136, 0.8); }
-        .status-bar.listening { color: rgba(255, 170, 0, 0.8); }
-
-        /* ── Orb container ── */
-        .orb-container {
-            position: relative;
-            width: 300px;
-            height: 300px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-
-        /* ── Rotating rings ── */
-        .ring {
-            position: absolute;
-            border-radius: 50%;
-            border: 1px solid rgba(0, 195, 255, 0.15);
-        }
-
-        .ring-1 {
-            width: 280px; height: 280px;
-            animation: rotate 20s linear infinite;
-            border-color: rgba(0, 195, 255, 0.1);
-            border-top-color: rgba(0, 195, 255, 0.4);
-        }
-
-        .ring-2 {
-            width: 240px; height: 240px;
-            animation: rotate-reverse 15s linear infinite;
-            border-color: rgba(0, 195, 255, 0.08);
-            border-right-color: rgba(0, 195, 255, 0.3);
-        }
-
-        .ring-3 {
-            width: 200px; height: 200px;
-            animation: rotate 12s linear infinite;
-            border-color: rgba(0, 195, 255, 0.06);
-            border-bottom-color: rgba(0, 195, 255, 0.25);
-        }
-
-        /* ── Main orb ── */
-        .orb {
-            width: 140px;
-            height: 140px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 35% 35%,
-                rgba(0, 220, 255, 0.4),
-                rgba(0, 150, 255, 0.2) 40%,
-                rgba(0, 80, 200, 0.1) 70%,
-                transparent 100%
-            );
-            box-shadow:
-                0 0 60px rgba(0, 195, 255, 0.3),
-                0 0 120px rgba(0, 150, 255, 0.15),
-                inset 0 0 60px rgba(0, 195, 255, 0.1);
-            animation: pulse 4s ease-in-out infinite;
-            transition: all 0.5s ease;
-        }
-
-        .orb.speaking {
-            background: radial-gradient(circle at 35% 35%,
-                rgba(0, 255, 170, 0.5),
-                rgba(0, 200, 255, 0.3) 40%,
-                rgba(0, 120, 255, 0.15) 70%,
-                transparent 100%
-            );
-            box-shadow:
-                0 0 80px rgba(0, 255, 200, 0.4),
-                0 0 160px rgba(0, 195, 255, 0.2),
-                inset 0 0 80px rgba(0, 255, 200, 0.15);
-            animation: pulse-speak 1s ease-in-out infinite;
-        }
-
-        .orb.listening {
-            background: radial-gradient(circle at 35% 35%,
-                rgba(255, 200, 0, 0.4),
-                rgba(255, 150, 0, 0.2) 40%,
-                rgba(200, 100, 0, 0.1) 70%,
-                transparent 100%
-            );
-            box-shadow:
-                0 0 80px rgba(255, 180, 0, 0.3),
-                0 0 160px rgba(255, 150, 0, 0.15),
-                inset 0 0 60px rgba(255, 200, 0, 0.1);
-            animation: pulse-listen 2s ease-in-out infinite;
-        }
-
-        .orb.processing {
-            animation: pulse-process 0.6s ease-in-out infinite;
-        }
-
-        /* ── Particles canvas ── */
-        #particles {
+        canvas#particles {
             position: fixed;
             top: 0; left: 0;
             width: 100%; height: 100%;
-            z-index: 0;
             pointer-events: none;
+            z-index: 0;
         }
 
-        /* ── Conversation area ── */
-        .conversation {
-            flex: 1;
-            width: 100%;
-            max-width: 800px;
-            overflow-y: auto;
-            margin-top: 20px;
-            padding: 20px;
-            scrollbar-width: thin;
-            scrollbar-color: rgba(0, 195, 255, 0.3) transparent;
+        /* ── HUD Layout: 2x2 grid ── */
+        .hud {
+            position: relative;
+            z-index: 10;
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 12px;
+            height: 100vh;
+            padding: 12px;
         }
 
-        .conversation::-webkit-scrollbar { width: 4px; }
-        .conversation::-webkit-scrollbar-thumb { background: rgba(0, 195, 255, 0.3); border-radius: 2px; }
-
-        .message {
-            margin-bottom: 20px;
-            opacity: 0;
-            transform: translateY(10px);
-            animation: fadeIn 0.5s forwards;
+        /* ── Panel styling ── */
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
         }
 
-        .message-label {
-            font-family: 'Orbitron', monospace;
-            font-size: 10px;
-            letter-spacing: 3px;
-            margin-bottom: 6px;
+        .panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+            opacity: 0.5;
         }
 
-        .message-text {
-            font-size: 18px;
-            line-height: 1.6;
-            font-weight: 300;
-            letter-spacing: 0.5px;
-        }
-
-        .message.jarvis .message-label { color: rgba(0, 195, 255, 0.7); }
-        .message.jarvis .message-text { color: rgba(0, 220, 255, 0.9); }
-
-        .message.user .message-label { color: rgba(255, 255, 255, 0.4); }
-        .message.user .message-text { color: rgba(255, 255, 255, 0.7); }
-
-        .message.system .message-label { color: rgba(0, 255, 136, 0.5); }
-        .message.system .message-text { color: rgba(0, 255, 136, 0.6); font-size: 14px; }
-
-        /* ── Typing indicator ── */
-        .typing {
-            display: none;
-            margin-bottom: 20px;
-        }
-
-        .typing.active { display: block; }
-
-        .typing-dots span {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: rgba(0, 195, 255, 0.6);
-            margin: 0 3px;
-            animation: typing-bounce 1.4s infinite;
-        }
-
-        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-        /* ── Bottom status ── */
-        .bottom-bar {
+        .panel-header {
             font-family: 'Orbitron', monospace;
             font-size: 10px;
             letter-spacing: 4px;
-            color: rgba(0, 195, 255, 0.3);
-            padding: 15px;
+            color: rgba(0, 195, 255, 0.6);
+            padding: 10px 15px 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header .dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--cyan);
+            animation: blink 3s infinite;
+        }
+
+        .panel-header .dot.active { background: var(--green); animation: none; }
+        .panel-header .dot.warning { background: var(--amber); }
+
+        /* ── TOP LEFT: Jarvis Core ── */
+        .jarvis-core {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .arc-reactor {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Arc reactor rings */
+        .reactor-ring {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px solid transparent;
+        }
+
+        .reactor-ring-1 {
+            width: 190px; height: 190px;
+            border-color: rgba(0, 195, 255, 0.1);
+            border-top-color: rgba(0, 195, 255, 0.5);
+            border-right-color: rgba(0, 195, 255, 0.3);
+            animation: rotate 8s linear infinite;
+        }
+
+        .reactor-ring-2 {
+            width: 160px; height: 160px;
+            border-color: rgba(0, 195, 255, 0.08);
+            border-bottom-color: rgba(0, 195, 255, 0.4);
+            border-left-color: rgba(0, 195, 255, 0.2);
+            animation: rotate-reverse 6s linear infinite;
+        }
+
+        .reactor-ring-3 {
+            width: 130px; height: 130px;
+            border-color: rgba(0, 195, 255, 0.06);
+            border-top-color: rgba(0, 195, 255, 0.35);
+            animation: rotate 4s linear infinite;
+        }
+
+        .reactor-ring-4 {
+            width: 100px; height: 100px;
+            border: 2px solid rgba(0, 195, 255, 0.15);
+            border-top-color: rgba(0, 195, 255, 0.6);
+            border-right-color: rgba(0, 195, 255, 0.4);
+            animation: rotate-reverse 3s linear infinite;
+        }
+
+        /* Reactor segments (triangle pattern) */
+        .reactor-segments {
+            position: absolute;
+            width: 80px; height: 80px;
+        }
+
+        .reactor-segment {
+            position: absolute;
+            width: 30px; height: 4px;
+            background: rgba(0, 195, 255, 0.3);
+            border-radius: 2px;
+            top: 50%; left: 50%;
+            transform-origin: 0 50%;
+        }
+
+        .reactor-segment:nth-child(1) { transform: rotate(0deg) translateX(8px); }
+        .reactor-segment:nth-child(2) { transform: rotate(45deg) translateX(8px); }
+        .reactor-segment:nth-child(3) { transform: rotate(90deg) translateX(8px); }
+        .reactor-segment:nth-child(4) { transform: rotate(135deg) translateX(8px); }
+        .reactor-segment:nth-child(5) { transform: rotate(180deg) translateX(8px); }
+        .reactor-segment:nth-child(6) { transform: rotate(225deg) translateX(8px); }
+        .reactor-segment:nth-child(7) { transform: rotate(270deg) translateX(8px); }
+        .reactor-segment:nth-child(8) { transform: rotate(315deg) translateX(8px); }
+
+        /* Core orb */
+        .core-orb {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: radial-gradient(circle,
+                rgba(255, 255, 255, 0.9),
+                rgba(0, 220, 255, 0.7) 30%,
+                rgba(0, 150, 255, 0.3) 60%,
+                transparent 100%
+            );
+            box-shadow:
+                0 0 30px rgba(0, 195, 255, 0.6),
+                0 0 60px rgba(0, 150, 255, 0.3),
+                0 0 100px rgba(0, 120, 255, 0.15);
+            animation: core-pulse 3s ease-in-out infinite;
+            z-index: 5;
+        }
+
+        .core-orb.speaking {
+            background: radial-gradient(circle,
+                rgba(255, 255, 255, 1),
+                rgba(0, 255, 180, 0.8) 30%,
+                rgba(0, 200, 255, 0.4) 60%,
+                transparent 100%
+            );
+            box-shadow:
+                0 0 40px rgba(0, 255, 200, 0.7),
+                0 0 80px rgba(0, 255, 200, 0.4),
+                0 0 120px rgba(0, 195, 255, 0.2);
+            animation: core-speak 0.8s ease-in-out infinite;
+        }
+
+        .core-orb.listening {
+            background: radial-gradient(circle,
+                rgba(255, 255, 255, 0.9),
+                rgba(255, 200, 0, 0.7) 30%,
+                rgba(255, 150, 0, 0.3) 60%,
+                transparent 100%
+            );
+            box-shadow:
+                0 0 40px rgba(255, 180, 0, 0.6),
+                0 0 80px rgba(255, 150, 0, 0.3);
+            animation: core-listen 1.5s ease-in-out infinite;
+        }
+
+        .core-orb.processing {
+            animation: core-process 0.5s ease-in-out infinite;
+        }
+
+        .jarvis-status {
+            font-family: 'Orbitron', monospace;
+            font-size: 11px;
+            letter-spacing: 5px;
+            color: rgba(0, 195, 255, 0.6);
+            margin-top: 20px;
             text-align: center;
+            transition: all 0.3s;
         }
 
-        /* ── Animations ── */
-        @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes rotate-reverse { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+        .jarvis-status.speaking { color: var(--green); }
+        .jarvis-status.listening { color: var(--amber); }
 
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); opacity: 0.8; }
-            50% { transform: scale(1.05); opacity: 1; }
+        /* HUD data readouts around reactor */
+        .hud-readout {
+            position: absolute;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 9px;
+            color: rgba(0, 195, 255, 0.4);
+            letter-spacing: 1px;
         }
 
-        @keyframes pulse-speak {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.12); }
+        .readout-tl { top: 15px; left: 15px; }
+        .readout-tr { top: 15px; right: 15px; text-align: right; }
+        .readout-bl { bottom: 60px; left: 15px; }
+        .readout-br { bottom: 60px; right: 15px; text-align: right; }
+
+        /* ── TOP RIGHT: Terminal ── */
+        .terminal-panel {
+            display: flex;
+            flex-direction: column;
         }
 
-        @keyframes pulse-listen {
-            0%, 100% { transform: scale(1); opacity: 0.8; }
-            50% { transform: scale(1.08); opacity: 1; }
+        .terminal-body {
+            flex: 1;
+            padding: 5px;
+            overflow: hidden;
         }
 
-        @keyframes pulse-process {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.06); }
+        .terminal-body .xterm { height: 100%; }
+
+        /* ── BOTTOM LEFT: Conversation ── */
+        .conversation-panel {
+            display: flex;
+            flex-direction: column;
         }
 
-        @keyframes fadeIn {
-            to { opacity: 1; transform: translateY(0); }
+        .conversation-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 15px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(0, 195, 255, 0.2) transparent;
         }
 
-        @keyframes typing-bounce {
-            0%, 60%, 100% { transform: translateY(0); }
-            30% { transform: translateY(-8px); }
+        .conversation-body::-webkit-scrollbar { width: 3px; }
+        .conversation-body::-webkit-scrollbar-thumb { background: rgba(0, 195, 255, 0.3); }
+
+        .msg {
+            margin-bottom: 14px;
+            opacity: 0;
+            animation: fadeIn 0.4s forwards;
         }
 
-        /* ── Boot sequence ── */
+        .msg-label {
+            font-family: 'Orbitron', monospace;
+            font-size: 9px;
+            letter-spacing: 3px;
+            margin-bottom: 4px;
+        }
+
+        .msg-text {
+            font-size: 15px;
+            line-height: 1.5;
+            font-weight: 300;
+        }
+
+        .msg.jarvis .msg-label { color: rgba(0, 195, 255, 0.6); }
+        .msg.jarvis .msg-text { color: rgba(0, 220, 255, 0.9); }
+        .msg.user .msg-label { color: rgba(255, 255, 255, 0.35); }
+        .msg.user .msg-text { color: rgba(255, 255, 255, 0.7); }
+        .msg.system .msg-label { color: rgba(0, 255, 136, 0.4); }
+        .msg.system .msg-text { color: rgba(0, 255, 136, 0.5); font-size: 12px; }
+
+        .typing-indicator {
+            display: none;
+            padding: 8px 0;
+        }
+
+        .typing-indicator.active { display: block; }
+
+        .typing-indicator span {
+            display: inline-block;
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: rgba(0, 195, 255, 0.5);
+            margin: 0 2px;
+            animation: typing-bounce 1.4s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        /* ── BOTTOM RIGHT: System info ── */
+        .system-panel {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .system-body {
+            flex: 1;
+            padding: 12px 15px;
+            overflow-y: auto;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: rgba(0, 195, 255, 0.5);
+            line-height: 1.8;
+        }
+
+        .sys-line { margin-bottom: 2px; }
+        .sys-line .label { color: rgba(0, 195, 255, 0.3); }
+        .sys-line .value { color: rgba(0, 195, 255, 0.7); }
+        .sys-line .value.ok { color: var(--green); }
+        .sys-line .value.warn { color: var(--amber); }
+
+        .waveform {
+            height: 40px;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .wave-bar {
+            width: 3px;
+            background: rgba(0, 195, 255, 0.3);
+            border-radius: 1px;
+            transition: height 0.1s;
+            height: 4px;
+        }
+
+        .wave-bar.active { background: var(--cyan); }
+
+        /* ── Boot overlay ── */
         .boot-overlay {
             position: fixed;
             top: 0; left: 0;
             width: 100%; height: 100%;
             background: #000;
-            z-index: 100;
+            z-index: 1000;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-direction: column;
-            transition: opacity 1s ease;
+            transition: opacity 1.5s ease;
         }
 
-        .boot-overlay.hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
+        .boot-overlay.hidden { opacity: 0; pointer-events: none; }
 
-        .boot-text {
+        .boot-title {
             font-family: 'Orbitron', monospace;
-            font-size: 24px;
-            letter-spacing: 12px;
-            color: rgba(0, 195, 255, 0.8);
+            font-size: 28px;
+            letter-spacing: 15px;
+            color: var(--cyan);
             animation: boot-flicker 2s ease-in-out;
         }
 
         .boot-sub {
-            font-size: 12px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
             letter-spacing: 6px;
             color: rgba(0, 195, 255, 0.4);
-            margin-top: 15px;
+            margin-top: 12px;
         }
 
+        /* ── Animations ── */
+        @keyframes rotate { to { transform: rotate(360deg); } }
+        @keyframes rotate-reverse { to { transform: rotate(-360deg); } }
+        @keyframes core-pulse {
+            0%, 100% { transform: scale(1); opacity: 0.9; }
+            50% { transform: scale(1.08); opacity: 1; }
+        }
+        @keyframes core-speak {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        @keyframes core-listen {
+            0%, 100% { transform: scale(1); opacity: 0.85; }
+            50% { transform: scale(1.1); opacity: 1; }
+        }
+        @keyframes core-process {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        @keyframes fadeIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes typing-bounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-6px); }
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
         @keyframes boot-flicker {
             0% { opacity: 0; }
-            20% { opacity: 0.8; }
+            20% { opacity: 0.9; }
             25% { opacity: 0.2; }
             30% { opacity: 1; }
             100% { opacity: 1; }
@@ -315,87 +462,132 @@
     </style>
 </head>
 <body>
-    <!-- Boot sequence -->
     <div class="boot-overlay" id="bootOverlay">
-        <div class="boot-text">J.A.R.V.I.S.</div>
-        <div class="boot-sub">INITIALIZING SYSTEMS</div>
+        <div class="boot-title">J.A.R.V.I.S.</div>
+        <div class="boot-sub">STARK INDUSTRIES // INITIALIZING</div>
     </div>
 
-    <!-- Background -->
+    <div class="scanlines"></div>
     <div class="bg-grid"></div>
     <canvas id="particles"></canvas>
 
-    <!-- Main UI -->
-    <div class="container">
-        <div class="header">J.A.R.V.I.S.</div>
-        <div class="status-bar" id="statusBar">SYSTEMS ONLINE</div>
+    <div class="hud">
+        <!-- TOP LEFT: Jarvis Core -->
+        <div class="panel jarvis-core" id="corePanel">
+            <div class="panel-header">
+                <span>JARVIS CORE</span>
+                <div class="dot" id="coreDot"></div>
+            </div>
+            <div class="hud-readout readout-tl">SYS: ACTIVE<br>CPU: NOMINAL</div>
+            <div class="hud-readout readout-tr">NET: ONLINE<br>SEC: CLEAR</div>
+            <div class="hud-readout readout-bl" id="readoutBL">AUDIO: STANDBY</div>
+            <div class="hud-readout readout-br" id="readoutBR">MODE: IDLE</div>
 
-        <div class="orb-container">
-            <div class="ring ring-1"></div>
-            <div class="ring ring-2"></div>
-            <div class="ring ring-3"></div>
-            <div class="orb" id="orb"></div>
+            <div class="arc-reactor">
+                <div class="reactor-ring reactor-ring-1"></div>
+                <div class="reactor-ring reactor-ring-2"></div>
+                <div class="reactor-ring reactor-ring-3"></div>
+                <div class="reactor-ring reactor-ring-4"></div>
+                <div class="reactor-segments">
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                    <div class="reactor-segment"></div>
+                </div>
+                <div class="core-orb" id="coreOrb"></div>
+            </div>
+
+            <div class="jarvis-status" id="jarvisStatus">AWAITING ACTIVATION</div>
         </div>
 
-        <div class="conversation" id="conversation">
-            <div class="typing" id="typing">
-                <div class="typing-dots">
+        <!-- TOP RIGHT: Terminal -->
+        <div class="panel terminal-panel">
+            <div class="panel-header">
+                <span>COMMAND TERMINAL</span>
+                <div class="dot active" id="termDot"></div>
+            </div>
+            <div class="terminal-body" id="terminalContainer"></div>
+        </div>
+
+        <!-- BOTTOM LEFT: Conversation -->
+        <div class="panel conversation-panel">
+            <div class="panel-header">
+                <span>VOICE INTERFACE</span>
+                <div class="dot" id="voiceDot"></div>
+            </div>
+            <div class="conversation-body" id="conversation">
+                <div class="typing-indicator" id="typing">
                     <span></span><span></span><span></span>
                 </div>
             </div>
         </div>
 
-        <div class="bottom-bar" id="bottomBar">AWAITING COMMAND</div>
+        <!-- BOTTOM RIGHT: System -->
+        <div class="panel system-panel">
+            <div class="panel-header">
+                <span>SYSTEM DIAGNOSTICS</span>
+                <div class="dot active"></div>
+            </div>
+            <div class="system-body" id="systemBody">
+                <div class="sys-line"><span class="label">STATUS: </span><span class="value ok" id="sysStatus">ONLINE</span></div>
+                <div class="sys-line"><span class="label">VOICE ENGINE: </span><span class="value" id="sysVoice">EDGE-TTS</span></div>
+                <div class="sys-line"><span class="label">AI CORE: </span><span class="value ok">CLAUDE</span></div>
+                <div class="sys-line"><span class="label">PERMISSIONS: </span><span class="value ok">UNRESTRICTED</span></div>
+                <div class="sys-line"><span class="label">MIC: </span><span class="value ok">ACTIVE</span></div>
+                <div class="sys-line"><span class="label">THRESHOLD: </span><span class="value">0.08 RMS</span></div>
+                <div class="waveform" id="waveform"></div>
+                <div class="sys-line"><span class="label">SONGS: </span><span class="value" id="sysSongs">-</span></div>
+                <div class="sys-line"><span class="label">NOW PLAYING: </span><span class="value" id="sysPlaying">-</span></div>
+                <div id="sysLog" style="margin-top: 10px; color: rgba(0,195,255,0.3); font-size: 10px;"></div>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <script>
         const socket = io();
-        const orb = document.getElementById('orb');
-        const statusBar = document.getElementById('statusBar');
+        const orb = document.getElementById('coreOrb');
+        const jarvisStatus = document.getElementById('jarvisStatus');
         const conversation = document.getElementById('conversation');
-        const typing = document.getElementById('typing');
-        const bottomBar = document.getElementById('bottomBar');
-        const bootOverlay = document.getElementById('bootOverlay');
+        const typingEl = document.getElementById('typing');
+        const coreDot = document.getElementById('coreDot');
+        const voiceDot = document.getElementById('voiceDot');
+        const readoutBL = document.getElementById('readoutBL');
+        const readoutBR = document.getElementById('readoutBR');
+        const sysLog = document.getElementById('sysLog');
 
-        // ── Boot sequence ──
-        setTimeout(() => {
-            bootOverlay.classList.add('hidden');
-        }, 2500);
+        // ── Boot ──
+        setTimeout(() => document.getElementById('bootOverlay').classList.add('hidden'), 2500);
 
         // ── Particles ──
         const canvas = document.getElementById('particles');
         const ctx = canvas.getContext('2d');
         let particles = [];
 
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
+        function resizeCanvas() { canvas.width = innerWidth; canvas.height = innerHeight; }
         resizeCanvas();
-        window.addEventListener('resize', resizeCanvas);
+        addEventListener('resize', resizeCanvas);
 
         class Particle {
-            constructor() {
-                this.reset();
-            }
+            constructor() { this.reset(); }
             reset() {
                 this.x = Math.random() * canvas.width;
                 this.y = Math.random() * canvas.height;
-                this.size = Math.random() * 2 + 0.5;
-                this.speedX = (Math.random() - 0.5) * 0.5;
-                this.speedY = (Math.random() - 0.5) * 0.5;
-                this.opacity = Math.random() * 0.5 + 0.1;
-                this.life = Math.random() * 200 + 100;
+                this.size = Math.random() * 1.5 + 0.3;
+                this.speedX = (Math.random() - 0.5) * 0.3;
+                this.speedY = (Math.random() - 0.5) * 0.3;
+                this.opacity = Math.random() * 0.4 + 0.05;
+                this.life = Math.random() * 300 + 100;
             }
             update() {
-                this.x += this.speedX;
-                this.y += this.speedY;
-                this.life--;
-                if (this.life <= 0 || this.x < 0 || this.x > canvas.width ||
-                    this.y < 0 || this.y > canvas.height) {
-                    this.reset();
-                }
+                this.x += this.speedX; this.y += this.speedY; this.life--;
+                if (this.life <= 0 || this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) this.reset();
             }
             draw() {
                 ctx.beginPath();
@@ -404,11 +596,7 @@
                 ctx.fill();
             }
         }
-
-        for (let i = 0; i < 80; i++) {
-            particles.push(new Particle());
-        }
-
+        for (let i = 0; i < 60; i++) particles.push(new Particle());
         function animateParticles() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             particles.forEach(p => { p.update(); p.draw(); });
@@ -416,89 +604,171 @@
         }
         animateParticles();
 
+        // ── Waveform bars ──
+        const waveform = document.getElementById('waveform');
+        for (let i = 0; i < 40; i++) {
+            const bar = document.createElement('div');
+            bar.className = 'wave-bar';
+            waveform.appendChild(bar);
+        }
+        const waveBars = waveform.querySelectorAll('.wave-bar');
+
+        // ── Terminal (xterm.js) ──
+        const term = new Terminal({
+            theme: {
+                background: 'rgba(0, 8, 16, 0.95)',
+                foreground: '#00c3ff',
+                cursor: '#00c3ff',
+                cursorAccent: '#000',
+                selectionBackground: 'rgba(0, 195, 255, 0.3)',
+            },
+            fontFamily: "'Share Tech Mono', monospace",
+            fontSize: 13,
+            cursorBlink: true,
+            cursorStyle: 'bar',
+        });
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById('terminalContainer'));
+        fitAddon.fit();
+        addEventListener('resize', () => fitAddon.fit());
+
+        term.onData(data => socket.emit('terminal_input', data));
+        socket.on('terminal_output', data => term.write(data));
+
         // ── Socket events ──
-        function setOrbState(state) {
-            orb.className = 'orb';
+        function setOrb(state) {
+            orb.className = 'core-orb';
             if (state) orb.classList.add(state);
         }
 
         function setStatus(text, cls) {
-            statusBar.textContent = text;
-            statusBar.className = 'status-bar';
-            if (cls) statusBar.classList.add(cls);
+            jarvisStatus.textContent = text;
+            jarvisStatus.className = 'jarvis-status';
+            if (cls) jarvisStatus.classList.add(cls);
         }
 
-        function addMessage(type, label, text) {
-            typing.classList.remove('active');
+        function addMsg(type, label, text) {
+            typingEl.classList.remove('active');
             const div = document.createElement('div');
-            div.className = `message ${type}`;
-            div.innerHTML = `
-                <div class="message-label">${label}</div>
-                <div class="message-text">${text}</div>
-            `;
-            conversation.insertBefore(div, typing);
+            div.className = `msg ${type}`;
+            div.innerHTML = `<div class="msg-label">${label}</div><div class="msg-text">${text}</div>`;
+            conversation.insertBefore(div, typingEl);
             conversation.scrollTop = conversation.scrollHeight;
         }
 
-        socket.on('boot', (data) => {
-            addMessage('system', 'SYSTEM', data.message);
+        function logSys(text) {
+            const el = document.createElement('div');
+            el.textContent = `> ${text}`;
+            el.style.marginBottom = '2px';
+            sysLog.appendChild(el);
+            sysLog.scrollTop = sysLog.scrollHeight;
+            // Keep log manageable
+            while (sysLog.children.length > 30) sysLog.removeChild(sysLog.firstChild);
+        }
+
+        socket.on('boot', d => { addMsg('system', 'SYSTEM', d.message); logSys(d.message); });
+
+        socket.on('status', d => {
+            setStatus(d.text || '', d.cls || '');
+            if (d.bottom) readoutBR.textContent = 'MODE: ' + d.bottom;
+            logSys(d.text || '');
         });
 
-        socket.on('status', (data) => {
-            setStatus(data.text, data.cls || '');
-            bottomBar.textContent = data.bottom || 'AWAITING COMMAND';
-        });
-
-        socket.on('jarvis_speaking', (data) => {
-            setOrbState('speaking');
+        socket.on('jarvis_speaking', d => {
+            setOrb('speaking');
             setStatus('SPEAKING', 'speaking');
-            addMessage('jarvis', 'JARVIS', data.text);
-            bottomBar.textContent = 'JARVIS IS SPEAKING';
+            coreDot.className = 'dot active';
+            readoutBL.textContent = 'AUDIO: OUTPUT';
+            addMsg('jarvis', 'JARVIS', d.text);
+            animateWave(true);
         });
 
-        socket.on('user_said', (data) => {
-            addMessage('user', 'YOU', data.text);
+        socket.on('user_said', d => {
+            addMsg('user', 'YOU', d.text);
+            logSys('User: ' + d.text);
         });
 
         socket.on('listening', () => {
-            setOrbState('listening');
+            setOrb('listening');
             setStatus('LISTENING', 'listening');
-            bottomBar.textContent = 'LISTENING FOR YOUR VOICE';
+            voiceDot.className = 'dot warning';
+            readoutBL.textContent = 'AUDIO: INPUT';
+            readoutBR.textContent = 'MODE: CONVERSATION';
+            animateWave(false);
         });
 
         socket.on('processing', () => {
-            setOrbState('processing');
-            setStatus('PROCESSING', 'active');
-            typing.classList.add('active');
+            setOrb('processing');
+            setStatus('PROCESSING', '');
+            typingEl.classList.add('active');
             conversation.scrollTop = conversation.scrollHeight;
-            bottomBar.textContent = 'PROCESSING REQUEST';
+            readoutBR.textContent = 'MODE: PROCESSING';
+            logSys('Processing request...');
         });
 
         socket.on('idle', () => {
-            setOrbState('');
+            setOrb('');
             setStatus('SYSTEMS ONLINE', '');
-            bottomBar.textContent = 'AWAITING COMMAND';
+            coreDot.className = 'dot';
+            voiceDot.className = 'dot';
+            readoutBL.textContent = 'AUDIO: STANDBY';
+            readoutBR.textContent = 'MODE: IDLE';
+            animateWave(false);
         });
 
-        socket.on('music', (data) => {
-            addMessage('system', 'MUSIC', data.text);
+        socket.on('music', d => {
+            addMsg('system', 'MUSIC', d.text);
+            document.getElementById('sysPlaying').textContent = d.text.replace('Now playing: ', '');
         });
 
-        socket.on('clap_detected', (data) => {
-            addMessage('system', 'DETECTION', data.text);
-        });
+        socket.on('clap_detected', d => { logSys(d.text); });
 
         socket.on('conversation_ended', () => {
-            setOrbState('');
+            setOrb('');
             setStatus('STANDING BY', '');
-            bottomBar.textContent = 'CLAP TWICE TO ACTIVATE';
+            readoutBR.textContent = 'MODE: STANDBY';
+            coreDot.className = 'dot';
+            voiceDot.className = 'dot';
+            animateWave(false);
         });
 
-        // ── Collect multi-part prompt ──
-        socket.on('prompt_buffered', (data) => {
-            addMessage('user', 'YOU (BUFFERING)', data.text);
-            bottomBar.textContent = 'SAY "GO GO GO" TO SEND';
+        socket.on('prompt_buffered', d => {
+            addMsg('user', 'BUFFERING', d.text);
+            readoutBR.textContent = 'MODE: BUFFERING';
         });
+
+        socket.on('songs_loaded', d => {
+            document.getElementById('sysSongs').textContent = d.count + ' LOADED';
+        });
+
+        socket.on('voice_engine', d => {
+            document.getElementById('sysVoice').textContent = d.engine;
+        });
+
+        socket.on('speaking_done', () => {
+            animateWave(false);
+        });
+
+        // ── Waveform animation ──
+        let waveInterval = null;
+        function animateWave(active) {
+            if (waveInterval) clearInterval(waveInterval);
+            if (active) {
+                waveInterval = setInterval(() => {
+                    waveBars.forEach(bar => {
+                        const h = Math.random() * 30 + 4;
+                        bar.style.height = h + 'px';
+                        bar.classList.add('active');
+                    });
+                }, 80);
+            } else {
+                waveBars.forEach(bar => {
+                    bar.style.height = '4px';
+                    bar.classList.remove('active');
+                });
+            }
+        }
     </script>
 </body>
 </html>
