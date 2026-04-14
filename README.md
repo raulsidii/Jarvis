@@ -1,25 +1,24 @@
 # JARVIS - Double-Clap Activated AI Assistant
 
-Clap your hands twice and JARVIS comes to life: music plays instantly, a Jarvis-style voice greets you, and Claude Code opens ready to work.
-
-https://github.com/user-attachments/assets/demo.mp4
+Clap your hands twice and JARVIS comes to life: a random AC/DC track blasts, Jarvis greets you, Claude Code opens, and you can have a full voice conversation with Jarvis.
 
 ## What happens when you clap
 
-1. **Music plays instantly** - pre-loaded in memory, zero delay
-2. **Jarvis speaks over the music** - "Welcome home sir. All systems are online."
+1. **Random AC/DC song plays instantly** - Back in Black, Thunderstruck, Shoot to Thrill, T.N.T., Highway to Hell, or The Razors Edge
+2. **Jarvis speaks over the music** - random greeting from a pool of Jarvis-style lines
 3. **Claude Code launches** - opens in a new terminal with `--dangerously-skip-permissions`
-4. **Starts listening again** - clap twice anytime to re-trigger
+4. **Conversation mode activates** - talk to Jarvis and he responds as the AI from Iron Man
+5. **Say "goodbye Jarvis"** to end the conversation and go back to listening for claps
 
 ## Quick Start
 
 ```bash
 # Clone
-git clone https://github.com/RafaTatay/jarvis.git
-cd jarvis
+git clone https://github.com/raulsidii/Jarvis.git
+cd Jarvis
 
 # Install dependencies
-pip install sounddevice numpy edge-tts pygame requests yt-dlp
+pip install sounddevice numpy edge-tts pygame requests SpeechRecognition yt-dlp
 
 # Install ffmpeg (needed for music download)
 # Windows:
@@ -27,8 +26,8 @@ winget install Gyan.FFmpeg
 # macOS:
 brew install ffmpeg
 
-# Download your music (pick any song)
-python download_music.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
+# Download the AC/DC songs
+python download_songs.py
 
 # Run JARVIS
 python jarvis.py
@@ -36,13 +35,36 @@ python jarvis.py
 
 ## Auto-Start on Login (Windows)
 
-Want JARVIS listening the moment your PC boots? Create this file:
-
-**`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Jarvis.bat`**
+Create this file at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Jarvis.bat`:
 ```bat
 @echo off
 start "JARVIS" python "C:\path\to\jarvis\jarvis.py"
 ```
+
+JARVIS will start listening the moment your PC boots up.
+
+## Songs Included
+
+| Song | Start Time | Notes |
+|------|-----------|-------|
+| Back in Black | 4s | Skips the intro, straight to the riff |
+| Thunderstruck | 0s | Full legendary guitar intro |
+| Shoot to Thrill | 0s | Iron Man 2 / Avengers |
+| T.N.T. | 0s | Pure energy |
+| Highway to Hell | 0s | Classic |
+| The Razors Edge | 30s | Skips to the heavy part |
+
+A random song is picked each time you clap.
+
+## Voice Conversation
+
+After the welcome sequence, Jarvis enters conversation mode:
+- Speak naturally and Jarvis will respond
+- He uses Claude (via the CLI) as his brain
+- Responses are spoken back in a British voice
+- Say **"goodbye Jarvis"** to end the conversation
+
+Requires: Claude Code CLI installed and authenticated, working microphone.
 
 ## Configuration
 
@@ -53,21 +75,19 @@ Edit the top of `jarvis.py`:
 | `THRESHOLD` | `0.08` | Clap sensitivity. Lower = more sensitive |
 | `MUSIC_VOLUME` | `0.25` | Music volume (0.0 to 1.0) |
 | `VOICE_DELAY` | `2.0` | Seconds after music before Jarvis speaks |
-| `GREETING` | `"Welcome home sir..."` | What Jarvis says |
+| `GREETINGS` | 6 variants | Pool of random Jarvis greetings |
 | `EDGE_TTS_VOICE` | `en-GB-RyanNeural` | TTS voice (British male) |
 | `PROJECT_DIR` | `~/jarvis` | Directory Claude Code opens in |
 
-## Voice Options
+## Voice Upgrade
 
 ### Free (default)
-Uses Microsoft Edge neural TTS - `en-GB-RyanNeural` (British male). Works out of the box, no API key needed.
+Microsoft Edge neural TTS with `en-GB-RyanNeural`. No API key needed.
 
 ### Premium
-Set `ELEVENLABS_API_KEY` in `jarvis.py` for higher quality voices via [ElevenLabs](https://elevenlabs.io).
+Set `ELEVENLABS_API_KEY` in `jarvis.py` for [ElevenLabs](https://elevenlabs.io) voices.
 
 ## Calibrating Clap Detection
-
-If claps aren't being detected (or there are false triggers), run the calibration test:
 
 ```bash
 python -c "
@@ -80,14 +100,14 @@ with sd.InputStream(samplerate=44100, blocksize=2205, channels=1, dtype='float32
 "
 ```
 
-Clap a few times and note the RMS values. Set `THRESHOLD` to about half of your clap's peak RMS.
+Clap and note the RMS values. Set `THRESHOLD` to about half your peak.
 
 ## Requirements
 
 - Python 3.10+
 - Working microphone
-- ffmpeg (for music download)
-- [Claude Code](https://claude.ai/claude-code) CLI installed
+- ffmpeg
+- [Claude Code](https://claude.ai/claude-code) CLI installed and authenticated
 
 ## License
 

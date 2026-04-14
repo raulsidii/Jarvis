@@ -2,6 +2,8 @@
 *.m4a
 *.wav
 *.ogg
+songs/
+music.mp3
 __pycache__/
 *.pyc
 .env
