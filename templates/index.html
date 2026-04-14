@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J.A.R.V.I.S.</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #000;
+            color: #fff;
+            font-family: 'Rajdhani', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* ── Background grid ── */
+        .bg-grid {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 195, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 195, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            z-index: 0;
+        }
+
+        /* ── Main layout ── */
+        .container {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            padding: 30px;
+        }
+
+        /* ── Header ── */
+        .header {
+            font-family: 'Orbitron', monospace;
+            font-size: 14px;
+            letter-spacing: 8px;
+            color: rgba(0, 195, 255, 0.6);
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .status-bar {
+            font-size: 12px;
+            letter-spacing: 4px;
+            color: rgba(0, 195, 255, 0.4);
+            margin-bottom: 30px;
+            transition: all 0.5s ease;
+        }
+
+        .status-bar.active { color: rgba(0, 195, 255, 0.8); }
+        .status-bar.speaking { color: rgba(0, 255, 136, 0.8); }
+        .status-bar.listening { color: rgba(255, 170, 0, 0.8); }
+
+        /* ── Orb container ── */
+        .orb-container {
+            position: relative;
+            width: 300px;
+            height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        /* ── Rotating rings ── */
+        .ring {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px solid rgba(0, 195, 255, 0.15);
+        }
+
+        .ring-1 {
+            width: 280px; height: 280px;
+            animation: rotate 20s linear infinite;
+            border-color: rgba(0, 195, 255, 0.1);
+            border-top-color: rgba(0, 195, 255, 0.4);
+        }
+
+        .ring-2 {
+            width: 240px; height: 240px;
+            animation: rotate-reverse 15s linear infinite;
+            border-color: rgba(0, 195, 255, 0.08);
+            border-right-color: rgba(0, 195, 255, 0.3);
+        }
+
+        .ring-3 {
+            width: 200px; height: 200px;
+            animation: rotate 12s linear infinite;
+            border-color: rgba(0, 195, 255, 0.06);
+            border-bottom-color: rgba(0, 195, 255, 0.25);
+        }
+
+        /* ── Main orb ── */
+        .orb {
+            width: 140px;
+            height: 140px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%,
+                rgba(0, 220, 255, 0.4),
+                rgba(0, 150, 255, 0.2) 40%,
+                rgba(0, 80, 200, 0.1) 70%,
+                transparent 100%
+            );
+            box-shadow:
+                0 0 60px rgba(0, 195, 255, 0.3),
+                0 0 120px rgba(0, 150, 255, 0.15),
+                inset 0 0 60px rgba(0, 195, 255, 0.1);
+            animation: pulse 4s ease-in-out infinite;
+            transition: all 0.5s ease;
+        }
+
+        .orb.speaking {
+            background: radial-gradient(circle at 35% 35%,
+                rgba(0, 255, 170, 0.5),
+                rgba(0, 200, 255, 0.3) 40%,
+                rgba(0, 120, 255, 0.15) 70%,
+                transparent 100%
+            );
+            box-shadow:
+                0 0 80px rgba(0, 255, 200, 0.4),
+                0 0 160px rgba(0, 195, 255, 0.2),
+                inset 0 0 80px rgba(0, 255, 200, 0.15);
+            animation: pulse-speak 1s ease-in-out infinite;
+        }
+
+        .orb.listening {
+            background: radial-gradient(circle at 35% 35%,
+                rgba(255, 200, 0, 0.4),
+                rgba(255, 150, 0, 0.2) 40%,
+                rgba(200, 100, 0, 0.1) 70%,
+                transparent 100%
+            );
+            box-shadow:
+                0 0 80px rgba(255, 180, 0, 0.3),
+                0 0 160px rgba(255, 150, 0, 0.15),
+                inset 0 0 60px rgba(255, 200, 0, 0.1);
+            animation: pulse-listen 2s ease-in-out infinite;
+        }
+
+        .orb.processing {
+            animation: pulse-process 0.6s ease-in-out infinite;
+        }
+
+        /* ── Particles canvas ── */
+        #particles {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* ── Conversation area ── */
+        .conversation {
+            flex: 1;
+            width: 100%;
+            max-width: 800px;
+            overflow-y: auto;
+            margin-top: 20px;
+            padding: 20px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(0, 195, 255, 0.3) transparent;
+        }
+
+        .conversation::-webkit-scrollbar { width: 4px; }
+        .conversation::-webkit-scrollbar-thumb { background: rgba(0, 195, 255, 0.3); border-radius: 2px; }
+
+        .message {
+            margin-bottom: 20px;
+            opacity: 0;
+            transform: translateY(10px);
+            animation: fadeIn 0.5s forwards;
+        }
+
+        .message-label {
+            font-family: 'Orbitron', monospace;
+            font-size: 10px;
+            letter-spacing: 3px;
+            margin-bottom: 6px;
+        }
+
+        .message-text {
+            font-size: 18px;
+            line-height: 1.6;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+        }
+
+        .message.jarvis .message-label { color: rgba(0, 195, 255, 0.7); }
+        .message.jarvis .message-text { color: rgba(0, 220, 255, 0.9); }
+
+        .message.user .message-label { color: rgba(255, 255, 255, 0.4); }
+        .message.user .message-text { color: rgba(255, 255, 255, 0.7); }
+
+        .message.system .message-label { color: rgba(0, 255, 136, 0.5); }
+        .message.system .message-text { color: rgba(0, 255, 136, 0.6); font-size: 14px; }
+
+        /* ── Typing indicator ── */
+        .typing {
+            display: none;
+            margin-bottom: 20px;
+        }
+
+        .typing.active { display: block; }
+
+        .typing-dots span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: rgba(0, 195, 255, 0.6);
+            margin: 0 3px;
+            animation: typing-bounce 1.4s infinite;
+        }
+
+        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+        /* ── Bottom status ── */
+        .bottom-bar {
+            font-family: 'Orbitron', monospace;
+            font-size: 10px;
+            letter-spacing: 4px;
+            color: rgba(0, 195, 255, 0.3);
+            padding: 15px;
+            text-align: center;
+        }
+
+        /* ── Animations ── */
+        @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes rotate-reverse { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.05); opacity: 1; }
+        }
+
+        @keyframes pulse-speak {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.12); }
+        }
+
+        @keyframes pulse-listen {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.08); opacity: 1; }
+        }
+
+        @keyframes pulse-process {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.06); }
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes typing-bounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-8px); }
+        }
+
+        /* ── Boot sequence ── */
+        .boot-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            transition: opacity 1s ease;
+        }
+
+        .boot-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .boot-text {
+            font-family: 'Orbitron', monospace;
+            font-size: 24px;
+            letter-spacing: 12px;
+            color: rgba(0, 195, 255, 0.8);
+            animation: boot-flicker 2s ease-in-out;
+        }
+
+        .boot-sub {
+            font-size: 12px;
+            letter-spacing: 6px;
+            color: rgba(0, 195, 255, 0.4);
+            margin-top: 15px;
+        }
+
+        @keyframes boot-flicker {
+            0% { opacity: 0; }
+            20% { opacity: 0.8; }
+            25% { opacity: 0.2; }
+            30% { opacity: 1; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Boot sequence -->
+    <div class="boot-overlay" id="bootOverlay">
+        <div class="boot-text">J.A.R.V.I.S.</div>
+        <div class="boot-sub">INITIALIZING SYSTEMS</div>
+    </div>
+
+    <!-- Background -->
+    <div class="bg-grid"></div>
+    <canvas id="particles"></canvas>
+
+    <!-- Main UI -->
+    <div class="container">
+        <div class="header">J.A.R.V.I.S.</div>
+        <div class="status-bar" id="statusBar">SYSTEMS ONLINE</div>
+
+        <div class="orb-container">
+            <div class="ring ring-1"></div>
+            <div class="ring ring-2"></div>
+            <div class="ring ring-3"></div>
+            <div class="orb" id="orb"></div>
+        </div>
+
+        <div class="conversation" id="conversation">
+            <div class="typing" id="typing">
+                <div class="typing-dots">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bottom-bar" id="bottomBar">AWAITING COMMAND</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+        const orb = document.getElementById('orb');
+        const statusBar = document.getElementById('statusBar');
+        const conversation = document.getElementById('conversation');
+        const typing = document.getElementById('typing');
+        const bottomBar = document.getElementById('bottomBar');
+        const bootOverlay = document.getElementById('bootOverlay');
+
+        // ── Boot sequence ──
+        setTimeout(() => {
+            bootOverlay.classList.add('hidden');
+        }, 2500);
+
+        // ── Particles ──
+        const canvas = document.getElementById('particles');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        class Particle {
+            constructor() {
+                this.reset();
+            }
+            reset() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 2 + 0.5;
+                this.speedX = (Math.random() - 0.5) * 0.5;
+                this.speedY = (Math.random() - 0.5) * 0.5;
+                this.opacity = Math.random() * 0.5 + 0.1;
+                this.life = Math.random() * 200 + 100;
+            }
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                this.life--;
+                if (this.life <= 0 || this.x < 0 || this.x > canvas.width ||
+                    this.y < 0 || this.y > canvas.height) {
+                    this.reset();
+                }
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(0, 195, 255, ${this.opacity})`;
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < 80; i++) {
+            particles.push(new Particle());
+        }
+
+        function animateParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            particles.forEach(p => { p.update(); p.draw(); });
+            requestAnimationFrame(animateParticles);
+        }
+        animateParticles();
+
+        // ── Socket events ──
+        function setOrbState(state) {
+            orb.className = 'orb';
+            if (state) orb.classList.add(state);
+        }
+
+        function setStatus(text, cls) {
+            statusBar.textContent = text;
+            statusBar.className = 'status-bar';
+            if (cls) statusBar.classList.add(cls);
+        }
+
+        function addMessage(type, label, text) {
+            typing.classList.remove('active');
+            const div = document.createElement('div');
+            div.className = `message ${type}`;
+            div.innerHTML = `
+                <div class="message-label">${label}</div>
+                <div class="message-text">${text}</div>
+            `;
+            conversation.insertBefore(div, typing);
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+
+        socket.on('boot', (data) => {
+            addMessage('system', 'SYSTEM', data.message);
+        });
+
+        socket.on('status', (data) => {
+            setStatus(data.text, data.cls || '');
+            bottomBar.textContent = data.bottom || 'AWAITING COMMAND';
+        });
+
+        socket.on('jarvis_speaking', (data) => {
+            setOrbState('speaking');
+            setStatus('SPEAKING', 'speaking');
+            addMessage('jarvis', 'JARVIS', data.text);
+            bottomBar.textContent = 'JARVIS IS SPEAKING';
+        });
+
+        socket.on('user_said', (data) => {
+            addMessage('user', 'YOU', data.text);
+        });
+
+        socket.on('listening', () => {
+            setOrbState('listening');
+            setStatus('LISTENING', 'listening');
+            bottomBar.textContent = 'LISTENING FOR YOUR VOICE';
+        });
+
+        socket.on('processing', () => {
+            setOrbState('processing');
+            setStatus('PROCESSING', 'active');
+            typing.classList.add('active');
+            conversation.scrollTop = conversation.scrollHeight;
+            bottomBar.textContent = 'PROCESSING REQUEST';
+        });
+
+        socket.on('idle', () => {
+            setOrbState('');
+            setStatus('SYSTEMS ONLINE', '');
+            bottomBar.textContent = 'AWAITING COMMAND';
+        });
+
+        socket.on('music', (data) => {
+            addMessage('system', 'MUSIC', data.text);
+        });
+
+        socket.on('clap_detected', (data) => {
+            addMessage('system', 'DETECTION', data.text);
+        });
+
+        socket.on('conversation_ended', () => {
+            setOrbState('');
+            setStatus('STANDING BY', '');
+            bottomBar.textContent = 'CLAP TWICE TO ACTIVATE';
+        });
+
+        // ── Collect multi-part prompt ──
+        socket.on('prompt_buffered', (data) => {
+            addMessage('user', 'YOU (BUFFERING)', data.text);
+            bottomBar.textContent = 'SAY "GO GO GO" TO SEND';
+        });
+    </script>
+</body>
+</html>

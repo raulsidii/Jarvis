@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-JARVIS - Double-clap activated AI assistant with voice conversation.
+JARVIS - Double-clap activated AI assistant with visual UI.
 
-Clap twice -> Random AC/DC song plays -> Jarvis speaks -> Claude Code opens.
-Then enter conversation mode: talk to Jarvis and he responds.
+Clap twice -> Music + animated Jarvis orb UI -> voice conversation.
 
 Dependencies:
-    pip install sounddevice numpy edge-tts pygame requests SpeechRecognition anthropic
+    pip install sounddevice numpy edge-tts pygame requests SpeechRecognition pyaudio flask flask-socketio anthropic
 
 Usage:
     python jarvis.py
@@ -21,29 +20,33 @@ import tempfile
 import asyncio
 import random
 import glob
+import webbrowser
+import re
 
 import numpy as np
 import sounddevice as sd
 import pygame
 import speech_recognition as sr
+from flask import Flask, render_template
+from flask_socketio import SocketIO
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Configuration
 # ──────────────────────────────────────────────────────────────────────────────
 SAMPLE_RATE   = 44100
-BLOCK_SIZE    = int(SAMPLE_RATE * 0.05)   # 50 ms per block
-THRESHOLD     = 0.08     # minimum RMS to count as a clap — adjust if needed
-COOLDOWN      = 0.1      # minimum seconds between claps
-DOUBLE_WINDOW = 2.0      # time window for the second clap
+BLOCK_SIZE    = int(SAMPLE_RATE * 0.05)
+THRESHOLD     = 0.08
+COOLDOWN      = 0.1
+DOUBLE_WINDOW = 2.0
 
-# ElevenLabs config (leave API key empty to use edge-tts)
-ELEVENLABS_API_KEY = ""   # Paste your key here, e.g. "sk_..."
-ELEVENLABS_VOICE_ID = "ErXwobaYiN019PkySvjV"  # "Antoni" - deep, British
+# ElevenLabs (optional)
+ELEVENLABS_API_KEY = ""
+ELEVENLABS_VOICE_ID = "ErXwobaYiN019PkySvjV"
 
-# Edge-TTS voice (used when ElevenLabs key is empty)
-EDGE_TTS_VOICE = "en-GB-RyanNeural"  # British male — closest to Jarvis
+# Edge-TTS
+EDGE_TTS_VOICE = "en-GB-RyanNeural"
 
-# Jarvis greetings — one is chosen randomly each time
+# Greetings pool
 GREETINGS = [
     "Welcome home sir. All systems are online. Claude Code is ready for your command.",
     "Good to have you back sir. I've kept everything running while you were away. Shall we begin?",
@@ -53,30 +56,40 @@ GREETINGS = [
     "Ah, sir. Right on time as always. I've pre-loaded all systems. Ready when you are.",
 ]
 
-# Music settings
-MUSIC_VOLUME = 0.25  # 0.0 to 1.0
-VOICE_DELAY  = 2.0   # seconds after music starts before Jarvis speaks
+# Music
+MUSIC_VOLUME = 0.10
+VOICE_DELAY  = 2.0
 
-# Where Claude Code opens
-PROJECT_DIR = os.path.expanduser("~/jarvis")
+# Spotify
+SPOTIFY_PLAYLIST = "spotify:playlist:5uYt1lgO5vVIjMTaneb540"
 
-# Songs directory
-SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
+# Paths
+PROJECT_DIR = os.path.expanduser("~")
+SONGS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
+GREETING_FILE = os.path.join(tempfile.gettempdir(), "jarvis_greeting.mp3")
+RESPONSE_FILE = os.path.join(tempfile.gettempdir(), "jarvis_response.mp3")
 
-# Conversation mode
+# Jarvis personality
 JARVIS_SYSTEM_PROMPT = """You are JARVIS (Just A Rather Very Intelligent System), the AI assistant from Iron Man.
 You speak with a refined British accent and dry wit, similar to Paul Bettany's portrayal.
 You address the user as "sir" and maintain a professional yet warm demeanor.
 You are helpful, intelligent, and occasionally witty with subtle humor.
-Keep responses concise — 1-3 sentences unless the question requires more detail.
-You have access to all of the user's systems and can help with any task.
+Keep responses concise - 1-3 sentences unless the question requires more detail.
+You have FULL access to the user's Windows computer - all files, folders, applications, and system settings.
+You can organize files, open apps, manage downloads, edit documents, run commands, and do anything on the system.
+When asked to do something on the computer, DO IT. Do not say you lack access. You are running with full permissions.
 Never break character. You ARE Jarvis."""
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  File paths
+#  Flask app
 # ──────────────────────────────────────────────────────────────────────────────
-GREETING_FILE = os.path.join(tempfile.gettempdir(), "jarvis_greeting.mp3")
-RESPONSE_FILE = os.path.join(tempfile.gettempdir(), "jarvis_response.mp3")
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'jarvis-secret'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Global state
@@ -84,16 +97,13 @@ RESPONSE_FILE = os.path.join(tempfile.gettempdir(), "jarvis_response.mp3")
 clap_times: list[float] = []
 triggered = False
 lock = threading.Lock()
-voice_sound = None
 song_files: list[str] = []
 in_conversation = False
 
-
 # ──────────────────────────────────────────────────────────────────────────────
-#  TTS helpers
+#  TTS
 # ──────────────────────────────────────────────────────────────────────────────
 def generate_tts(text: str, output_path: str):
-    """Generate speech audio file from text."""
     if ELEVENLABS_API_KEY:
         if generate_elevenlabs_tts(text, output_path):
             return
@@ -101,7 +111,6 @@ def generate_tts(text: str, output_path: str):
 
 
 def generate_edge_tts(text: str, output_path: str):
-    """Generate speech with edge-tts."""
     import edge_tts
     async def _gen():
         comm = edge_tts.Communicate(text, EDGE_TTS_VOICE)
@@ -110,7 +119,6 @@ def generate_edge_tts(text: str, output_path: str):
 
 
 def generate_elevenlabs_tts(text: str, output_path: str) -> bool:
-    """Generate speech with ElevenLabs API. Returns True on success."""
     try:
         import requests
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
@@ -131,7 +139,6 @@ def generate_elevenlabs_tts(text: str, output_path: str) -> bool:
 
 
 def play_voice(audio_path: str):
-    """Play a voice audio file (blocks until done)."""
     sound = pygame.mixer.Sound(audio_path)
     channel = sound.play()
     while channel.get_busy():
@@ -142,28 +149,19 @@ def play_voice(audio_path: str):
 #  Startup
 # ──────────────────────────────────────────────────────────────────────────────
 def startup_init():
-    """Pre-load everything at startup."""
     global song_files
 
-    # Init pygame mixer
     pygame.mixer.init(frequency=44100)
 
-    # Find all songs
     song_files = sorted(glob.glob(os.path.join(SONGS_DIR, "*.mp3")))
     if not song_files:
-        print("  [ERROR] No songs found in songs/ directory!")
-        print("  Run: python download_songs.py")
+        print("  [ERROR] No songs in songs/ directory. Run: python download_songs.py")
         sys.exit(1)
 
-    print(f"  [INIT] Loaded {len(song_files)} songs:")
-    for s in song_files:
-        print(f"         - {os.path.basename(s)}")
-
-    # Pre-generate a greeting
-    greeting = random.choice(GREETINGS)
-    print(f"  [INIT] Generating voice: \"{greeting[:50]}...\"")
-    generate_tts(greeting, GREETING_FILE)
-    print("  [INIT] Voice ready.")
+    print(f"  [INIT] {len(song_files)} songs loaded")
+    print("  [INIT] Generating startup voice...")
+    generate_tts(random.choice(GREETINGS), GREETING_FILE)
+    print("  [INIT] Ready.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -182,12 +180,11 @@ def audio_callback(indata, frames, time_info, status):
         with lock:
             if clap_times and (now - clap_times[-1]) < COOLDOWN:
                 return
-
             clap_times.append(now)
             clap_times = [t for t in clap_times if now - t <= DOUBLE_WINDOW]
-
             count = len(clap_times)
-            print(f"  [CLAP {count}/2]  RMS={rms:.3f}")
+
+            socketio.emit('clap_detected', {'text': f'Clap {count}/2 detected (RMS={rms:.3f})'})
 
             if count >= 2:
                 triggered = True
@@ -199,151 +196,162 @@ def audio_callback(indata, frames, time_info, status):
 #  Welcome sequence
 # ──────────────────────────────────────────────────────────────────────────────
 def welcome_sequence():
-    global in_conversation
+    global in_conversation, triggered
 
-    print()
-    print("  ======================================")
-    print("  J.A.R.V.I.S. ACTIVATED")
-    print("  ======================================")
-    print()
+    socketio.emit('status', {'text': 'ACTIVATING', 'cls': 'active', 'bottom': 'INITIALIZING SEQUENCE'})
 
-    # Pick a random song
+    # Pick and play random song
     song = random.choice(song_files)
     song_name = os.path.basename(song).replace("_", " ").replace(".mp3", "").title()
-    print(f"  [MUSIC] Playing: {song_name}")
+    socketio.emit('music', {'text': f'Now playing: {song_name}'})
 
-    # Load and play song
     pygame.mixer.music.load(song)
     pygame.mixer.music.set_volume(MUSIC_VOLUME)
     pygame.mixer.music.play()
 
-    # Wait, then speak
     time.sleep(VOICE_DELAY)
 
-    # Pick and speak greeting
+    # Speak greeting
     greeting = random.choice(GREETINGS)
-    print(f'  [JARVIS]: "{greeting}"')
+    socketio.emit('jarvis_speaking', {'text': greeting})
     generate_tts(greeting, GREETING_FILE)
     play_voice(GREETING_FILE)
 
     # Open Claude Code
-    time.sleep(1)
+    time.sleep(0.5)
     open_claude_code()
 
-    # Enter conversation mode
-    print()
-    print("  ======================================")
-    print("  CONVERSATION MODE - Talk to Jarvis!")
-    print("  Say \"goodbye Jarvis\" to exit")
-    print("  ======================================")
-    print()
+    # Spotify after song ends (in background)
+    def wait_and_spotify():
+        while pygame.mixer.music.get_busy():
+            time.sleep(1)
+        open_spotify_playlist()
+    threading.Thread(target=wait_and_spotify, daemon=True).start()
 
+    # Enter conversation mode
+    socketio.emit('listening')
     in_conversation = True
     conversation_loop()
     in_conversation = False
+    triggered = False
 
-    # Fade out music if still playing
-    if pygame.mixer.music.get_busy():
-        pygame.mixer.music.fadeout(3000)
-        time.sleep(3)
-
-    print()
-    print("  ======================================")
-    print("  JARVIS STANDING BY")
-    print("  ======================================")
-    print()
+    socketio.emit('conversation_ended')
 
 
 def open_claude_code():
-    """Open a new terminal with Claude Code + --dangerously-skip-permissions."""
-    print("  [CLAUDE CODE] Launching...")
-    os.makedirs(PROJECT_DIR, exist_ok=True)
-
+    socketio.emit('status', {'text': 'LAUNCHING CLAUDE CODE', 'cls': 'active', 'bottom': 'OPENING TERMINAL'})
     try:
         subprocess.Popen(
             ["wt", "new-tab", "--title", "JARVIS - Claude Code",
              "cmd", "/k",
              f"cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"],
         )
-        print("  [CLAUDE CODE] Opened in Windows Terminal")
     except FileNotFoundError:
         cmd = f'start "JARVIS - Claude Code" cmd /k "cd /d {PROJECT_DIR} && claude --dangerously-skip-permissions"'
         subprocess.Popen(cmd, shell=True)
-        print("  [CLAUDE CODE] Opened in cmd")
+
+
+def open_spotify_playlist():
+    socketio.emit('music', {'text': 'Switching to Spotify: Overdose of Rock playlist'})
+    subprocess.Popen(["cmd", "/c", "start", "", SPOTIFY_PLAYLIST], shell=False)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Conversation mode
+#  Conversation
 # ──────────────────────────────────────────────────────────────────────────────
 def conversation_loop():
-    """Listen for voice input, respond as Jarvis."""
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
 
     conversation_history = []
+    prompt_buffer = []  # for multi-part prompts
 
     while True:
-        # Listen for speech
+        socketio.emit('listening')
+
         user_text = listen_for_speech(recognizer)
         if user_text is None:
             continue
 
-        print(f'  [YOU]: "{user_text}"')
+        lower = user_text.lower().strip()
 
-        # Check for exit phrases
-        lower = user_text.lower()
+        # Check for exit
         if any(phrase in lower for phrase in ["goodbye jarvis", "bye jarvis", "exit jarvis",
                                                "that's all jarvis", "stop jarvis", "shut down"]):
             farewell = "Very good sir. I'll be here if you need me. Just clap twice."
-            print(f'  [JARVIS]: "{farewell}"')
+            socketio.emit('jarvis_speaking', {'text': farewell})
             generate_tts(farewell, RESPONSE_FILE)
             play_voice(RESPONSE_FILE)
             break
 
-        # Get Jarvis response via Claude
-        response = get_jarvis_response(user_text, conversation_history)
-        if response:
-            print(f'  [JARVIS]: "{response}"')
-            conversation_history.append({"role": "user", "content": user_text})
-            conversation_history.append({"role": "assistant", "content": response})
+        # Check for "go go go" trigger — send buffered prompt
+        if re.match(r'^go[\s,\.]*go[\s,\.]*go[\s,\.]*$', lower):
+            if prompt_buffer:
+                full_prompt = " ".join(prompt_buffer)
+                prompt_buffer = []
+                socketio.emit('user_said', {'text': full_prompt})
+                socketio.emit('processing')
+                response = get_jarvis_response(full_prompt, conversation_history)
+                if response:
+                    socketio.emit('jarvis_speaking', {'text': response})
+                    conversation_history.append({"role": "user", "content": full_prompt})
+                    conversation_history.append({"role": "assistant", "content": response})
+                    if len(conversation_history) > 20:
+                        conversation_history = conversation_history[-20:]
+                    generate_tts(response, RESPONSE_FILE)
+                    play_voice(RESPONSE_FILE)
+            else:
+                socketio.emit('jarvis_speaking', {'text': 'I don\'t have a pending command, sir. Tell me what you need, then say go go go.'})
+                generate_tts("I don't have a pending command, sir. Tell me what you need, then say go go go.", RESPONSE_FILE)
+                play_voice(RESPONSE_FILE)
+            continue
 
-            # Keep history manageable
-            if len(conversation_history) > 20:
-                conversation_history = conversation_history[-20:]
+        # Check if this is a short direct command (single sentence, no "go" needed)
+        # vs a multi-part prompt that needs buffering
+        word_count = len(user_text.split())
 
-            # Speak it
-            generate_tts(response, RESPONSE_FILE)
-            play_voice(RESPONSE_FILE)
+        if word_count <= 15:
+            # Short command — execute immediately
+            socketio.emit('user_said', {'text': user_text})
+            socketio.emit('processing')
+
+            response = get_jarvis_response(user_text, conversation_history)
+            if response:
+                socketio.emit('jarvis_speaking', {'text': response})
+                conversation_history.append({"role": "user", "content": user_text})
+                conversation_history.append({"role": "assistant", "content": response})
+                if len(conversation_history) > 20:
+                    conversation_history = conversation_history[-20:]
+                generate_tts(response, RESPONSE_FILE)
+                play_voice(RESPONSE_FILE)
+        else:
+            # Longer input — buffer it, wait for "go go go"
+            prompt_buffer.append(user_text)
+            socketio.emit('prompt_buffered', {'text': user_text})
+            socketio.emit('status', {'text': 'BUFFERING PROMPT', 'cls': 'listening',
+                                     'bottom': 'SAY "GO GO GO" TO SEND'})
 
 
 def listen_for_speech(recognizer: sr.Recognizer) -> str | None:
-    """Listen to microphone and return recognized text, or None."""
     try:
         with sr.Microphone() as source:
-            print("  [LISTENING...]", end="\r")
-            audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
-
-        print("  [PROCESSING...]", end="\r")
+            audio = recognizer.listen(source, timeout=10, phrase_time_limit=30)
         text = recognizer.recognize_google(audio)
         return text
-    except sr.WaitTimeoutError:
-        return None
-    except sr.UnknownValueError:
+    except (sr.WaitTimeoutError, sr.UnknownValueError):
         return None
     except sr.RequestError as e:
-        print(f"  [SPEECH ERROR]: {e}")
+        socketio.emit('status', {'text': f'SPEECH ERROR: {e}', 'cls': '', 'bottom': ''})
         return None
     except Exception:
         return None
 
 
 def get_jarvis_response(user_input: str, history: list) -> str | None:
-    """Get a Jarvis response using Claude CLI."""
     try:
-        # Build the prompt with conversation history
         prompt_parts = []
-        for msg in history[-10:]:  # last 10 messages for context
+        for msg in history[-10:]:
             role = "User" if msg["role"] == "user" else "Jarvis"
             prompt_parts.append(f"{role}: {msg['content']}")
         prompt_parts.append(f"User: {user_input}")
@@ -351,7 +359,6 @@ def get_jarvis_response(user_input: str, history: list) -> str | None:
 
         full_prompt = f"{JARVIS_SYSTEM_PROMPT}\n\nConversation:\n" + "\n".join(prompt_parts)
 
-        # Use claude CLI in print mode (already authenticated)
         result = subprocess.run(
             ["claude", "-p", full_prompt],
             capture_output=True, text=True, timeout=30,
@@ -359,12 +366,10 @@ def get_jarvis_response(user_input: str, history: list) -> str | None:
 
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
-        else:
-            return "I'm afraid I encountered a slight hiccup, sir. Could you repeat that?"
+        return "I'm afraid I encountered a slight hiccup, sir. Could you repeat that?"
     except subprocess.TimeoutExpired:
         return "Apologies sir, that took longer than expected. Do go on."
-    except Exception as e:
-        print(f"  [LLM ERROR]: {e}")
+    except Exception:
         return "My systems seem to be experiencing a brief interruption, sir."
 
 
@@ -372,8 +377,6 @@ def get_jarvis_response(user_input: str, history: list) -> str | None:
 #  Main
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
-    global triggered
-
     print()
     print("  =============================================")
     print("  J.A.R.V.I.S. - Just A Rather Very Intelligent System")
@@ -382,37 +385,36 @@ def main():
 
     startup_init()
 
-    print()
-    print(f"  Clap detection threshold: {THRESHOLD}")
-    print(f"  Voice: {'ElevenLabs' if ELEVENLABS_API_KEY else f'Edge-TTS ({EDGE_TTS_VOICE})'}")
-    print(f"  Songs: {len(song_files)} loaded")
-    print("  Conversation: Enabled (via Claude CLI)")
-    print("  Ctrl+C to exit")
-    print("  =============================================")
-    print()
-    print("  Listening for double clap...")
+    # Start clap detection in background
+    def clap_listener():
+        global triggered
+        try:
+            with sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                blocksize=BLOCK_SIZE,
+                channels=1,
+                dtype="float32",
+                callback=audio_callback,
+            ):
+                while True:
+                    time.sleep(0.1)
+        except Exception as e:
+            print(f"  [MIC ERROR]: {e}")
+
+    threading.Thread(target=clap_listener, daemon=True).start()
+
+    # Open the Jarvis UI in browser
+    def open_browser():
+        time.sleep(1.5)
+        webbrowser.open("http://127.0.0.1:5000")
+
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    print("  [SERVER] Starting Jarvis UI at http://127.0.0.1:5000")
+    print("  [MIC] Listening for double clap...")
     print()
 
-    try:
-        with sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            blocksize=BLOCK_SIZE,
-            channels=1,
-            dtype="float32",
-            callback=audio_callback,
-        ):
-            while True:
-                time.sleep(0.1)
-                if triggered:
-                    # Wait for the welcome sequence + conversation to finish
-                    while triggered or in_conversation:
-                        time.sleep(1)
-                    triggered = False
-                    print("  Listening for double clap...\n")
-    except KeyboardInterrupt:
-        print("\n  Jarvis signing off. Goodbye, sir.")
-        pygame.mixer.quit()
-        sys.exit(0)
+    socketio.run(app, host='127.0.0.1', port=5000, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":
